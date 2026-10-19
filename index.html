@@ -1,95 +1,70 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Kamera Çevirmeni</title>
-  <meta name="description" content="Kamera ile yakalanan yazıyı cihaz üzerinde OCR ile okuyup seçtiğiniz dile çeviren PWA." />
-  <meta name="theme-color" content="#1a5cff" />
-  <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <link rel="manifest" href="manifest.json" />
-  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="icons/icon-192.png" />
-  <link rel="stylesheet" href="style.css" />
-  <!-- Tesseract.js (OCR, cihaz üzerinde) -->
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kamera Çevirmeni</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#3b82f6">
 </head>
 <body>
+    <div class="container">
+        <header>
+            <h1>📷 Kamera Çevirmeni</h1>
+            <p>Yazıları anında hedef dilinize çevirin</p>
+        </header>
 
-  <header class="appbar">
-    <div class="brand">
-      <span class="logo" aria-hidden="true">🌐</span>
-      <div class="brand-text">
-        <h1>Kamera Çevirmeni</h1>
-        <p>Yakala · Oku · Çevir</p>
-      </div>
+        <!-- Dil Seçimi -->
+        <div class="control-group">
+            <label for="targetLanguage">Hedef Dil:</label>
+            <select id="targetLanguage">
+                <option value="tr" selected>Türkçe</option>
+                <option value="en">İngilizce</option>
+                <option value="de">Almanca</option>
+                <option value="fr">Fransızca</option>
+                <option value="es">İspanyolca</option>
+                <option value="ar">Arapça</option>
+                <option value="ru">Rusça</option>
+            </select>
+        </div>
+
+        <!-- Kamera Alanı -->
+        <div class="camera-container">
+            <video id="video" autoplay playsinline></video>
+            <canvas id="canvas" style="display: none;"></canvas>
+            <div class="camera-actions">
+                <button id="captureBtn" class="btn primary">📸 Fotoğraf Çek & Çevir</button>
+            </div>
+        </div>
+
+        <!-- Alternatif Girişler -->
+        <div class="alternative-inputs">
+            <label for="galleryInput" class="btn secondary">📂 Galeriden Yükle</label>
+            <input type="file" id="galleryInput" accept="image/*" style="display: none;">
+        </div>
+
+        <!-- Manuel Metin Girişi -->
+        <div class="manual-input-group">
+            <textarea id="manualText" placeholder="Kamerayla okunamayan metinleri buraya yazabilirsiniz..."></textarea>
+            <button id="translateManualBtn" class="btn secondary">✍️ Metni Çevir</button>
+        </div>
+
+        <!-- Yükleme / Durum Göstergesi -->
+        <div id="status" class="status-message"></div>
+
+        <!-- Sonuç Alanı -->
+        <div class="result-container">
+            <h3>Algılanan Metin (Kaynak):</h3>
+            <p id="sourceText" class="result-box">-</p>
+
+            <h3>Çeviri Sonucu:</h3>
+            <p id="translatedText" class="result-box">-</p>
+        </div>
     </div>
-    <button id="installBtn" class="btn ghost" hidden>Yükle</button>
-  </header>
 
-  <main>
-    <!-- Hedef dil -->
-    <section class="card lang-card">
-      <label for="targetLang">Hedef dil</label>
-      <select id="targetLang" aria-label="Çeviri hedef dili">
-        <option value="tr" selected>Türkçe</option>
-        <option value="en">İngilizce</option>
-        <option value="de">Almanca</option>
-        <option value="fr">Fransızca</option>
-        <option value="es">İspanyolca</option>
-        <option value="it">İtalyanca</option>
-        <option value="ru">Rusça</option>
-        <option value="ar">Arapça</option>
-        <option value="ja">Japonca</option>
-        <option value="zh-CN">Çince (Basitleştirilmiş)</option>
-      </select>
-    </section>
-
-    <!-- Kamera -->
-    <section class="scanner" aria-label="Kamera">
-      <video id="video" playsinline muted autoplay></video>
-      <div class="overlay" aria-hidden="true">
-        <div class="frame"></div>
-      </div>
-      <button id="captureBtn" class="capture" type="button" aria-label="Yakala ve çevir">📷</button>
-      <div id="cameraMsg" class="camera-msg" hidden></div>
-    </section>
-
-    <div class="actions">
-      <button id="galleryBtn" class="btn secondary" type="button">🖼️ Galeriden Yükle</button>
-      <input id="galleryInput" type="file" accept="image/*" hidden />
-    </div>
-
-    <!-- Elle metin girişi -->
-    <section class="card">
-      <label for="manualText">Metni elle girin</label>
-      <textarea id="manualText" rows="3" placeholder="Kamerayla okunamayan metni buraya yazın…"></textarea>
-      <button id="translateTextBtn" class="btn primary" type="button">Çevir</button>
-    </section>
-
-    <!-- Durum / yükleniyor -->
-    <div id="status" class="status" hidden></div>
-
-    <!-- Sonuç -->
-    <section id="resultCard" class="card result-card" hidden aria-live="polite">
-      <div class="result-block">
-        <h2>Okunan metin</h2>
-        <p id="ocrText" class="result-text"></p>
-        <p id="detectedLang" class="meta"></p>
-      </div>
-      <div class="result-block">
-        <h2>Çeviri</h2>
-        <p id="translatedText" class="result-text translated"></p>
-        <p id="translationMeta" class="meta"></p>
-      </div>
-    </section>
-  </main>
-
-  <footer class="foot">
-    OCR tamamen cihaz üzerinde çalışır (Tesseract.js). Çeviri: MyMemory ücretsiz servisi.
-  </footer>
-
-  <script src="app.js"></script>
+    <!-- Tesseract.js (On-Device OCR) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="app.js"></script>
 </body>
 </html>
