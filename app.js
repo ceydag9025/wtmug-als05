@@ -66,24 +66,54 @@ async function processImage(imageSource) {
     }
 }
 
-// 3. API Anahtarsız Ücretsiz Çeviri (MyMemory API)
+// 3. API Anahtarsız Ücretsiz Çeviri (MyMemory + LibreTranslate Yedekli)
 async function translateText(text) {
     const targetLang = targetLanguageSelect.value;
+    statusEl.textContent = "Çevriliyor...";
+
+    // 1. Yol: MyMemory API Denemesi
     try {
         const response = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=autodetect|${targetLang}`);
         const data = await response.json();
         
-        if (data && data.responseData) {
-            translatedTextEl.textContent = data.responseData.translatedText;
-            statusEl.textContent = "Çeviri tamamlandı.";
-        } else {
-            translatedTextEl.textContent = "Çeviri alınamadı.";
-            statusEl.textContent = "";
+        if (data && data.responseData && data.responseData.translatedText) {
+            // MyMemory bazen limit aşımında uyarı metni döner, bunu kontrol edelim
+            if (!data.responseData.translatedText.includes("QUERY LENGTH LIMIT")) {
+                translatedTextEl.textContent = data.responseData.translatedText;
+                statusEl.textContent = "Çeviri tamamlandı.";
+                return;
+            }
         }
-    } catch (error) {
-        statusEl.textContent = "Çeviri sunucusuna bağlanılamadı.";
-        console.error(error);
+    } catch (err) {
+        console.warn("MyMemory API hatası, yedek servis deneniyor...", err);
     }
+
+    // 2. Yol: Yedek Servis (LibreTranslate Halkaya Açık Sunucu)
+    try {
+        const response = await fetch("https://libretranslate.de/translate", {
+            method: "POST",
+            body: JSON.stringify({
+                q: text,
+                source: "auto",
+                target: targetLang,
+                format: "text"
+            }),
+            headers: { "Content-Type": "application/json" }
+        });
+        
+        const data = await response.json();
+        if (data && data.translatedText) {
+            translatedTextEl.textContent = data.translatedText;
+            statusEl.textContent = "Çeviri tamamlandı.";
+            return;
+        }
+    } catch (err) {
+        console.error("LibreTranslate API hatası:", err);
+    }
+
+    // Hiçbiri çalışmazsa
+    statusEl.textContent = "Çeviri sunucularına ulaşılamadı. Lütfen internetinizi kontrol edin.";
+    translatedTextEl.textContent = "Çeviri başarısız.";
 }
 
 // Olay Dinleyicileri
