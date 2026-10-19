@@ -31,15 +31,18 @@ let deferredInstall = null;
 /* =========================================================
    BAŞLAT
    ========================================================= */
-init();
-
 async function init(){
+  // 1) ÖNCE olayları bağla — butonlar hemen çalışsın
+  bindEvents();
   setupInstallPrompt();
   setupServiceWorker();
+
+  // 2) Sonra kamera ve OCR'ı başlat (hata olsa bile butonlar zaten bağlı)
   await initCamera();
-  await initOCR();
-  bindEvents();
+  initOCR(); // await YOK — arka planda yüklensin, hata verse de butonlar çalışır
 }
+
+
 
 /* =========================================================
    KAMERA
@@ -72,23 +75,29 @@ function hideCameraError(){ cameraMsg.hidden = true; }
    OCR — Tesseract.js
    ========================================================= */
 async function initOCR(){
-  showStatus("OCR motoru hazırlanıyor…");
+  showStatus("OCR motoru hazırlanıyor… (ilk seferde 10-20 sn sürebilir)");
   try{
     worker = await Tesseract.createWorker("eng", 1, {
       logger: m => {
         if (m.status === "recognizing text"){
           showStatus(`Metin okunuyor… %${Math.round((m.progress || 0) * 100)}`);
+        } else if (m.status === "loading tesseract core"){
+          showStatus("OCR motoru indiriliyor…");
+        } else if (m.status === "loading language traineddata"){
+          showStatus("Dil paketi indiriliyor…");
+        } else if (m.status === "initializing api"){
+          showStatus("OCR başlatılıyor…");
         }
       }
     });
-    /* Sayfa düzeni: otomatik + OSD (yön/script algılama) */
     await worker.setParameters({
       tessedit_pageseg_mode: Tesseract.PSM.AUTO_OSD,
     });
     hideStatus();
+    console.log("✅ OCR hazır");
   }catch(err){
-    console.error("OCR başlatılamadı", err);
-    showStatus("OCR motoru yüklenemedi. İnternet bağlantınızı kontrol edin.", true);
+    console.error("❌ OCR başlatılamadı", err);
+    showStatus("OCR motoru yüklenemedi. İnternet bağlantınızı kontrol edin ve sayfayı yenileyin.", true);
   }
 }
 
@@ -97,26 +106,29 @@ async function initOCR(){
    ========================================================= */
 async function captureAndTranslate(){
   if (busy) return;
+
+  if (!worker){
+    showStatus("OCR motoru henüz hazır değil. Lütfen birkaç saniye bekleyip tekrar deneyin.", true);
+    return;
+  }
+
   busy = true;
   try{
     hideResult();
-    if (!worker){
-      showStatus("OCR motoru hazır değil. Lütfen bekleyin veya sayfayı yenileyin.", true);
-      return;
-    }
-
-    /* Kameradan kare al */
     const canvas = document.createElement("canvas");
     canvas.width  = video.videoWidth  || 1280;
     canvas.height = video.videoHeight || 720;
+    if (!canvas.width || !canvas.height){
+      showStatus("Kamera görüntüsü alınamadı. Kameranın açık olduğundan emin olun.", true);
+      return;
+    }
     const ctx = canvas.getContext("2d");
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
     const imageDataUrl = canvas.toDataURL("image/jpeg", 0.92);
     await runPipeline(imageDataUrl);
   }catch(err){
     console.error(err);
-    showStatus("Görüntü işlenirken hata oluştu. Lütfen tekrar deneyin.", true);
+    showStatus("Görüntü işlenirken hata oluştu: " + err.message, true);
   }finally{
     busy = false;
     hideStatus();
