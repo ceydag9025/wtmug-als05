@@ -1,50 +1,138 @@
-/* =========================================================
-   Kamera Çevirmeni — sağlam sürüm
-   Tesseract.js (OCR) + MyMemory (çeviri)
-   ========================================================= */
+/* Kamera Çevirmeni — teşhis paneli ile */
 
 const $ = (id) => document.getElementById(id);
 
-const video       = $("video");
-const cameraMsg   = $("cameraMsg");
-const captureBtn  = $("captureBtn");
-const galleryBtn  = $("galleryBtn");
-const galleryInput= $("galleryInput");
-const targetLang  = $("targetLang");
-const manualText  = $("manualText");
-const translateBtn= $("translateTextBtn");
-const statusBox   = $("status");
-const resultCard  = $("resultCard");
-const ocrTextEl   = $("ocrText");
-const detectedEl  = $("detectedLang");
-const translatedEl= $("translatedText");
-const translationMeta = $("translationMeta");
-const installBtn  = $("installBtn");
+const video = $("video"), cameraMsg = $("cameraMsg");
+const captureBtn = $("captureBtn"), galleryBtn = $("galleryBtn"), galleryInput = $("galleryInput");
+const targetLang = $("targetLang"), manualText = $("manualText"), translateBtn = $("translateTextBtn");
+const statusBox = $("status"), resultCard = $("resultCard");
+const ocrTextEl = $("ocrText"), detectedEl = $("detectedLang");
+const translatedEl = $("translatedText"), translationMeta = $("translationMeta");
+const installBtn = $("installBtn");
 
-let worker = null;
-let stream = null;
-let busy = false;
-let deferredInstall = null;
+let worker = null, stream = null, busy = false, deferredInstall = null;
 
-/* ---------- EN ÖNEMLİ: ÖNCE OLAYLARI BAĞLA ---------- */
+/* ============ TEŞHİS PANELİ ============ */
+const debugBox = document.createElement("pre");
+debugBox.id = "debugBox";
+debugBox.style.cssText = `
+  background:#0d1117; color:#7ee787; font:12px/1.5 monospace;
+  padding:10px; border-radius:10px; margin:10px 0; max-height:220px;
+  overflow:auto; white-space:pre-wrap; word-break:break-all;
+  border:1px solid #30363d;
+`;
+document.querySelector("main").prepend(debugBox);
+
+function log(msg, ok){
+  const t = new Date().toLocaleTimeString("tr-TR");
+  const line = `[${t}] ${ok === true ? "🟢" : ok === false ? "🔴" : "🔵"} ${msg}`;
+  debugBox.textContent += line + "\n";
+  debugBox.scrollTop = debugBox.scrollHeight;
+  console.log(line);
+}
+log("Sayfa yüklendi");
+
+/* ============ OLAYLARI HEMEN BAĞLA ============ */
 bindEvents();
 setupInstallPrompt();
 setupServiceWorker();
+log("Olaylar bağlandı");
 
-/* Sonra kamera ve OCR (başarısız olsalar bile butonlar çalışır) */
-initCamera();
-loadTesseract();
+/* ============ KAMERAYI BUTONLA BAŞLAT ============ */
+// Kamerayı "Otomatik başlat" yerine, kullanıcı kameraya dokunduğunda başlat.
+// Bu, Chrome Android'in autoplay kısıtlamalarını tamamen atlar.
+const camStartBtn = document.createElement("button");
+camStartBtn.textContent = "📷 Kamerayı Başlat";
+camStartBtn.className = "btn primary";
+camStartBtn.style.marginBottom = "10px";
+camStartBtn.addEventListener("click", startCamera);
+document.querySelector(".scanner").after(camStartBtn);
 
-/* ---------- OLAY BAĞLAMA ---------- */
+log("'Kamerayı Başlat' butonu hazır — dokunun");
+
+/* ============ KAMERA ============ */
+async function startCamera(){
+  log("startCamera() çağrıldı");
+
+  if (!window.isSecureContext){
+    log("isSecureContext = false → HTTPS GEREKLİ", false);
+    cameraMsg.hidden = false;
+    cameraMsg.textContent = "Kamera için HTTPS gerekli. Adres 'https://' ile başlamalı.";
+    return;
+  }
+  log("HTTPS: OK");
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    log("mediaDevices yok", false);
+    return;
+  }
+  log("mediaDevices: OK");
+
+  try{
+    log("getUserMedia çağrılıyor…");
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false
+    });
+    log("getUserMedia döndü. Track sayısı: " + stream.getVideoTracks().length, true);
+    const track = stream.getVideoTracks()[0];
+    log("Track: " + track.label + " | enabled=" + track.enabled + " | readyState=" + track.readyState);
+
+    // ÖNEMLİ: autoplay için property'yi de ayarla
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = stream;
+
+    video.onloadedmetadata = () => {
+      log("onloadedmetadata: " + video.videoWidth + "x" + video.videoHeight, true);
+    };
+    video.onplay = () => log("video 'play' olayı", true);
+    video.onplaying = () => log("video 'playing' olayı", true);
+    video.onstalled = () => log("video 'stalled' (dondu)", false);
+    video.onerror = () => log("video error: " + (video.error && video.error.message), false);
+
+    try{
+      await video.play();
+      log("video.play() başarılı", true);
+    }catch(e){
+      log("video.play() hatası: " + e.name + " — " + e.message, false);
+      // Bir kez daha dene (bazı Android sürümlerinde ilk deneme reddedilir)
+      try{ await video.play(); log("video.play() 2. deneme başarılı", true); }
+      catch(e2){ log("video.play() 2. deneme de başarısız: " + e2.name, false); }
+    }
+
+    hideCameraError();
+    camStartBtn.textContent = "🔄 Kamerayı Yeniden Başlat";
+
+    // 2 sn sonra kare üretiliyor mu?
+    setTimeout(() => {
+      const w = video.videoWidth, rs = video.readyState, paused = video.paused;
+      log(`2sn sonra → readyState=${rs}, videoWidth=${w}, paused=${paused}`,
+          w > 0 && !paused ? true : false);
+      if (w === 0 || paused){
+        cameraMsg.hidden = false;
+        cameraMsg.textContent = "Kamera açık ama görüntü gelmiyor. Başka bir uygulama kamerayı kullanıyor olabilir. Tüm uygulamaları kapatıp tekrar deneyin.";
+      }
+    }, 2000);
+
+  }catch(err){
+    log("Kamera HATASI: " + err.name + " — " + err.message, false);
+    let msg = "Kamera başlatılamadı: " + err.name;
+    if (err.name === "NotAllowedError") msg = "Kamera izni reddedildi. Kilit simgesinden izin verin.";
+    else if (err.name === "NotFoundError") msg = "Cihazda kamera bulunamadı.";
+    else if (err.name === "NotReadableError") msg = "Kamera başka bir uygulama tarafından kullanılıyor. O uygulamayı kapatın.";
+    else if (err.name === "OverconstrainedError") msg = "Kamera istenen ayarları desteklemiyor.";
+    cameraMsg.hidden = false;
+    cameraMsg.textContent = msg;
+  }
+}
+
+function hideCameraError(){ cameraMsg.hidden = true; }
+
+/* ============ OLAYLAR ============ */
 function bindEvents(){
-  captureBtn.addEventListener("click", () => {
-    console.log("📷 captureBtn");
-    captureAndTranslate();
-  });
-  galleryBtn.addEventListener("click", () => {
-    console.log("🖼️ galleryBtn");
-    galleryInput.click();
-  });
+  captureBtn.addEventListener("click", captureAndTranslate);
+  galleryBtn.addEventListener("click", () => galleryInput.click());
   galleryInput.addEventListener("change", (e) => {
     const f = e.target.files && e.target.files[0];
     if (f) handleGalleryFile(f);
@@ -56,209 +144,144 @@ function bindEvents(){
   });
 }
 
-/* ---------- TESSERACT DİNAMİK YÜKLEME ---------- */
-async function loadTesseract(){
+/* ============ OCR ============ */
+async function ensureOCR(){
+  if (worker) return true;
   if (typeof Tesseract === "undefined"){
-    showStatus("OCR motoru indiriliyor…");
+    log("Tesseract CDN'den yükleniyor…");
     try{
-      await new Promise((resolve, reject) => {
+      await new Promise((res, rej) => {
         const s = document.createElement("script");
         s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-        s.onload = resolve;
-        s.onerror = () => reject(new Error("CDN erişilemedi"));
+        s.onload = res;
+        s.onerror = () => rej(new Error("CDN hatası"));
         document.head.appendChild(s);
-        setTimeout(() => reject(new Error("zaman aşımı")), 25000);
       });
-    }catch(err){
-      console.error("Tesseract yüklenemedi:", err);
-      showStatus("OCR motoru yüklenemedi (CDN erişimi). Galeri/elle giriş çalışır, OCR için internet gerekli.", true);
-      return;
-    }
+      log("Tesseract script yüklendi", true);
+    }catch(e){ log("Tesseract YÜKLENEMEDİ: " + e.message, false); return false; }
   }
-  await initOCR();
-}
-
-async function initOCR(){
-  showStatus("OCR motoru hazırlanıyor… (ilk seferde 15-20 sn)");
+  log("OCR worker oluşturuluyor…");
   try{
     worker = await Tesseract.createWorker("eng", 1, {
       logger: m => {
         if (m.status === "recognizing text"){
           showStatus("Metin okunuyor… %" + Math.round((m.progress || 0) * 100));
-        } else if (m.status === "loading language traineddata"){
-          showStatus("Dil paketi indiriliyor…");
-        } else if (m.status === "initializing api"){
-          showStatus("OCR başlatılıyor…");
         }
       }
     });
-    await worker.setParameters({ tessedit_pageseg_mode: Tesseract.PSM.AUTO_OSD });
-    hideStatus();
-    console.log("✅ OCR hazır");
-  }catch(err){
-    console.error("OCR başlatılamadı:", err);
-    showStatus("OCR başlatılamadı. İnterneti kontrol edip sayfayı yenileyin.", true);
-  }
+    log("OCR worker HAZIR", true);
+    return true;
+  }catch(e){ log("OCR worker hatası: " + e.message, false); return false; }
 }
 
-/* ---------- KAMERA ---------- */
-async function initCamera(){
-  if (!window.isSecureContext){
-    showCameraError("Kamera için HTTPS gerekli. Adresin https:// ile başladığından emin olun.");
-    return;
-  }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    showCameraError("Bu tarayıcı kamera API'sini desteklemiyor.");
-    return;
-  }
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false
-    });
-    video.srcObject = stream;
-    await video.play();
-    hideCameraError();
-    console.log("✅ Kamera açıldı");
-  }catch(err){
-    console.warn("Kamera hatası:", err.name, err.message);
-    let msg = "Kamera başlatılamadı. (Hata: " + err.name + ")";
-    if (err.name === "NotAllowedError") msg = "Kamera izni reddedildi. Tarayıcıdan izin verin veya galeriden görsel yükleyin.";
-    else if (err.name === "NotFoundError") msg = "Cihazda kamera bulunamadı.";
-    else if (err.name === "NotReadableError") msg = "Kamera başka bir uygulama tarafından kullanılıyor olabilir.";
-    showCameraError(msg);
-  }
-}
-
-function showCameraError(msg){
-  cameraMsg.hidden = false;
-  cameraMsg.textContent = msg;
-}
-function hideCameraError(){ cameraMsg.hidden = true; }
-
-/* ---------- YAKALA → OCR → ÇEVİR ---------- */
+/* ============ YAKALA → OCR → ÇEVİR ============ */
 async function captureAndTranslate(){
   if (busy) return;
-  if (!video.videoWidth || !video.videoHeight){
-    showStatus("Kamera görüntüsü yok. Kamera iznini ve önizlemeyi kontrol edin.", true);
-    return;
-  }
-  if (!worker){
-    showStatus("OCR motoru henüz hazır değil. Birkaç saniye bekleyip tekrar deneyin.", true);
+  if (!video.videoWidth){
+    log("video.videoWidth=0 → önce kamerayı başlatın", false);
+    showStatus("Önce kamerayı başlatın.", true);
     return;
   }
   busy = true;
   try{
     hideResult();
-    const canvas = document.createElement("canvas");
-    canvas.width  = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
-    await runPipeline(dataUrl);
-  }catch(err){
-    console.error(err);
-    showStatus("Hata: " + err.message, true);
-  }finally{
-    busy = false;
-    hideStatus();
-  }
+    const ok = await ensureOCR();
+    if (!ok){ showStatus("OCR yüklenemedi.", true); return; }
+
+    const c = document.createElement("canvas");
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext("2d").drawImage(video, 0, 0);
+    log("Kare yakalandı: " + c.width + "x" + c.height);
+    await runPipeline(c.toDataURL("image/jpeg", 0.92));
+  }catch(e){
+    log("Yakalama hatası: " + e.message, false);
+    showStatus("Hata: " + e.message, true);
+  }finally{ busy = false; hideStatus(); }
 }
 
 async function handleGalleryFile(file){
   if (busy) return;
-  if (!worker){
-    showStatus("OCR motoru henüz hazır değil. Birkaç saniye bekleyip tekrar deneyin.", true);
-    return;
-  }
   busy = true;
   try{
     hideResult();
-    const dataUrl = await fileToDataURL(file);
+    const ok = await ensureOCR();
+    if (!ok){ showStatus("OCR yüklenemedi.", true); return; }
+    const dataUrl = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = rej;
+      r.readAsDataURL(file);
+    });
     await runPipeline(dataUrl);
-  }catch(err){
-    console.error(err);
-    showStatus("Görsel okunamadı: " + err.message, true);
-  }finally{
-    busy = false;
-    hideStatus();
-  }
+  }catch(e){
+    log("Galeri hatası: " + e.message, false);
+    showStatus("Görsel okunamadı: " + e.message, true);
+  }finally{ busy = false; hideStatus(); }
 }
 
 async function translateManualText(){
   if (busy) return;
   const text = manualText.value.trim();
-  if (!text){ showStatus("Lütfen çevrilecek metni girin.", true); return; }
+  if (!text){ showStatus("Metin girin.", true); return; }
   busy = true;
   try{
     hideResult();
     showStatus("Çeviri yapılıyor…");
-    const target = targetLang.value;
-    const { translated, detected } = await translateText(text, target);
-    renderResult({ original: text, detected: detected || "—", translated, note: "Elle girilen metin" });
-  }catch(err){
-    console.error(err);
-    showStatus("Çeviri yapılamadı: " + err.message, true);
-  }finally{
-    busy = false;
-    hideStatus();
-  }
+    const r = await translateText(text, targetLang.value);
+    renderResult({ original: text, detected: r.detected || "—", translated: r.translated, note: "Elle girilen metin" });
+  }catch(e){
+    showStatus("Çeviri hatası: " + e.message, true);
+  }finally{ busy = false; hideStatus(); }
 }
 
-async function runPipeline(imageDataUrl){
+async function runPipeline(dataUrl){
   showStatus("Metin okunuyor…");
-  const { data } = await worker.recognize(imageDataUrl);
+  log("OCR recognize çağrılıyor…");
+  const { data } = await worker.recognize(dataUrl);
   const text = (data.text || "").trim();
+  log("OCR bitti. Karakter sayısı: " + text.length);
   if (!text){
-    showStatus("Görselde okunabilir metin bulunamadı. Farklı bir açıyla veya daha yakın mesafeyle tekrar deneyin.", true);
+    showStatus("Görselde metin bulunamadı. Daha yakından deneyin.", true);
     return;
   }
-  const confidence = typeof data.confidence === "number" ? Math.round(data.confidence) : null;
-  const script = data.script || "";
   showStatus("Çeviri yapılıyor…");
-  const target = targetLang.value;
-  const { translated, detected } = await translateText(text, target);
+  const r = await translateText(text, targetLang.value);
   renderResult({
     original: text,
-    detected: detected || (script ? "Yazı sistemi: " + script : "Otomatik algılandı"),
-    translated,
-    note: confidence !== null ? "OCR güveni: %" + confidence : ""
+    detected: r.detected || (data.script ? "Yazı sistemi: " + data.script : "Otomatik"),
+    translated: r.translated,
+    note: typeof data.confidence === "number" ? "OCR güveni: %" + Math.round(data.confidence) : ""
   });
 }
 
-/* ---------- ÇEVİRİ ---------- */
-async function translateText(text, targetLangCode){
-  const chunks = splitText(text, 480);
-  const out = [];
-  let detected = "";
-  for (const chunk of chunks){
-    const url = "https://api.mymemory.translated.net/get?q=" +
-      encodeURIComponent(chunk) + "&langpair=auto|" + encodeURIComponent(targetLangCode);
+/* ============ ÇEVİRİ ============ */
+async function translateText(text, target){
+  const enc = new TextEncoder();
+  const parts = [];
+  if (enc.encode(text).length <= 480){ parts.push(text); }
+  else{
+    let cur = "";
+    for (const w of text.split(/\s+/)){
+      const cand = cur ? cur + " " + w : w;
+      if (enc.encode(cand).length > 480){ if (cur) parts.push(cur); cur = w; }
+      else cur = cand;
+    }
+    if (cur) parts.push(cur);
+  }
+  const out = []; let detected = "";
+  for (const p of parts){
+    const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(p) + "&langpair=auto|" + encodeURIComponent(target);
     const res = await fetch(url);
     if (!res.ok) throw new Error("MyMemory HTTP " + res.status);
-    const json = await res.json();
-    if (json.responseStatus !== 200) throw new Error(json.responseDetails || "Çeviri hatası");
-    out.push(json.responseData && json.responseData.translatedText || "");
-    if (!detected && json.responseData && json.responseData.detectedLanguage)
-      detected = json.responseData.detectedLanguage;
+    const j = await res.json();
+    if (j.responseStatus !== 200) throw new Error(j.responseDetails || "Çeviri hatası");
+    out.push((j.responseData && j.responseData.translatedText) || "");
+    if (!detected && j.responseData && j.responseData.detectedLanguage) detected = j.responseData.detectedLanguage;
   }
-  return { translated: out.join(" ").trim() || "(Çeviri boş)", detected };
+  return { translated: out.join(" ").trim() || "(boş)", detected };
 }
 
-function splitText(text, maxBytes){
-  const enc = new TextEncoder();
-  if (enc.encode(text).length <= maxBytes) return [text];
-  const parts = []; let cur = "";
-  for (const w of text.split(/\s+/)){
-    const cand = cur ? cur + " " + w : w;
-    if (enc.encode(cand).length > maxBytes){ if (cur) parts.push(cur); cur = w; }
-    else cur = cand;
-  }
-  if (cur) parts.push(cur);
-  return parts.length ? parts : [text.slice(0, 150)];
-}
-
-/* ---------- GÖRÜNÜM ---------- */
+/* ============ GÖRÜNÜM ============ */
 function renderResult({ original, detected, translated, note }){
   ocrTextEl.textContent = original;
   detectedEl.textContent = detected ? "Kaynak dil: " + detected : "";
@@ -268,44 +291,29 @@ function renderResult({ original, detected, translated, note }){
   resultCard.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 function hideResult(){ resultCard.hidden = true; }
-
-function showStatus(msg, isError){
-  statusBox.hidden = false;
-  statusBox.textContent = msg;
-  statusBox.style.color = isError ? "#c62828" : "#1a5cff";
-  statusBox.style.background = isError ? "#fdecec" : "#e8eeff";
+function showStatus(m, err){
+  statusBox.hidden = false; statusBox.textContent = m;
+  statusBox.style.color = err ? "#c62828" : "#1a5cff";
+  statusBox.style.background = err ? "#fdecec" : "#e8eeff";
 }
 function hideStatus(){ statusBox.hidden = true; }
 
-function fileToDataURL(file){
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(r.result);
-    r.onerror = reject;
-    r.readAsDataURL(file);
-  });
-}
-
-/* ---------- PWA ---------- */
+/* ============ PWA ============ */
 function setupInstallPrompt(){
   window.addEventListener("beforeinstallprompt", (e) => {
-    e.preventDefault();
-    deferredInstall = e;
-    installBtn.hidden = false;
+    e.preventDefault(); deferredInstall = e; installBtn.hidden = false;
   });
   installBtn.addEventListener("click", async () => {
     if (!deferredInstall) return;
     deferredInstall.prompt();
     await deferredInstall.userChoice;
-    deferredInstall = null;
-    installBtn.hidden = true;
+    deferredInstall = null; installBtn.hidden = true;
   });
 }
-
 function setupServiceWorker(){
   if ("serviceWorker" in navigator){
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("sw.js").catch(e => console.warn("SW:", e));
+      navigator.serviceWorker.register("sw.js").catch(e => log("SW: " + e.message, false));
     });
   }
 }
