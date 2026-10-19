@@ -1,4 +1,4 @@
-const CACHE = "kamera-cevirmeni-v1";
+const CACHE = "kamera-cevirmeni-v2";
 const ASSETS = [
   "./", "./index.html", "./style.css", "./app.js",
   "./manifest.json",
